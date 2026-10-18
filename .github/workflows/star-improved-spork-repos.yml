@@ -38,7 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-    LOG_DIR: logs
+      LOG_DIR: logs
     steps:
       - name: Checkout (not strictly required, but useful)
         uses: actions/checkout@v4
@@ -57,7 +57,6 @@ jobs:
             exit 1
           fi
 
-          # Verify token works and display the username (for debugging)
           USER_JSON=$(curl -s -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/user")
           login=$(echo "$USER_JSON" | jq -r '.login // empty')
           if [ -z "$login" ]; then
@@ -76,12 +75,9 @@ jobs:
           set -euo pipefail
           mkdir -p artifact "$LOG_DIR"
 
-          ART_JSON=$(curl -s -H "Authorization: Bearer $TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/$SOURCE_OWNER/$SOURCE_REPO/actions/artifacts")
+          ART_JSON=$(curl -s -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$SOURCE_OWNER/$SOURCE_REPO/actions/artifacts")
 
-          ART_ID=$(echo "$ART_JSON" | jq -r --arg prefix "$PREFIX" \
-            '[.artifacts[] | select(.name|startswith($prefix))] | sort_by(.updated_at) | last | .id')
+          ART_ID=$(echo "$ART_JSON" | jq -r --arg prefix "$PREFIX" '[.artifacts[] | select(.name|startswith($prefix))] | sort_by(.updated_at) | last | .id')
 
           if [ -z "$ART_ID" ] || [ "$ART_ID" = "null" ]; then
             echo "::error::No artifact found with prefix $PREFIX in $SOURCE_OWNER/$SOURCE_REPO"
@@ -90,10 +86,7 @@ jobs:
           fi
 
           echo "Found artifact id: $ART_ID"
-          # Download the zip (this URL will redirect to a storage URL)
-          curl -L -H "Authorization: Bearer $TOKEN" \
-            -o artifact.zip \
-            "https://api.github.com/repos/$SOURCE_OWNER/$SOURCE_REPO/actions/artifacts/$ART_ID/zip"
+          curl -L -H "Authorization: Bearer $TOKEN" -o artifact.zip "https://api.github.com/repos/$SOURCE_OWNER/$SOURCE_REPO/actions/artifacts/$ART_ID/zip"
 
           unzip -q artifact.zip -d artifact
           echo "Artifact extracted to ./artifact"
@@ -127,8 +120,6 @@ jobs:
           repo = (row.get("repository") or "").strip()
           if not repo:
           continue
-          # normalize: allow full URL or owner/repo or repo only (repo-only will be skipped)
-          # Accept patterns like owner/repo or https://github.com/owner/repo
           if repo.startswith("http://") or repo.startswith("https://"):
           m = re.match(r'https?://github\.com/([^/]+/[^/]+)', repo)
           if m:
@@ -136,38 +127,36 @@ jobs:
           else:
           continue
           if '/' not in repo:
-          # it's not in owner/repo form; skip
           continue
           repos.append(repo)
 
-          # dedupe while preserving order
-          seen = set()
-          unique = []
-          for r in repos:
-          if r not in seen:
-          seen.add(r)
-          unique.append(r)
+            seen = set()
+            unique = []
+            for r in repos:
+            if r not in seen:
+            seen.add(r)
+            unique.append(r)
 
-          final = unique[:max_repos]
-          if not final:
-          raise SystemExit("No repositories found in CSV after normalization/dedup")
+            final = unique[:max_repos]
+            if not final:
+            raise SystemExit("No repositories found in CSV after normalization/dedup")
 
-          print("\n".join(final))
-          PY
-          echo "Wrote repos_to_star.txt:"
-          cat repos_to_star.txt
+            print("\n".join(final))
+            PY
+            echo "Wrote repos_to_star.txt:"
+            cat repos_to_star.txt
 
-       - name: Upload repos list artifact (repos_to_star.txt)
-         uses: actions/upload-artifact@v4
-         with:
-         name: repos-to-star
-         path: repos_to_star.txt
+      - name: Upload repos list artifact (repos_to_star.txt)
+        uses: actions/upload-artifact@v4
+        with:
+          name: repos-to-star
+          path: repos_to_star.txt
 
-       - name: Star repositories (with retries & logging)
-         env:
-         TOKEN: ${{ secrets.STAR_TOKEN }}
-         DRY: ${{ inputs.dry_run }}
-         run: |
+      - name: Star repositories (with retries & logging)
+        env:
+          TOKEN: ${{ secrets.STAR_TOKEN }}
+          DRY: ${{ inputs.dry_run }}
+        run: |
           set -euo pipefail
           mkdir -p "$LOG_DIR"
           OUT="$LOG_DIR/star-$(date -u +"%Y%m%dT%H%M%SZ").log"
@@ -186,7 +175,6 @@ jobs:
             echo "----" | tee -a "$OUT"
             echo "Repository: $R" | tee -a "$OUT"
 
-            # basic validation
             if ! echo "$R" | grep -qE '^[^/]+/[^/]+$'; then
               echo "SKIP: repo not in owner/repo format: $R" | tee -a "$OUT"
               continue
@@ -202,10 +190,7 @@ jobs:
             until [ $attempt -ge $attempts_per_repo ]; do
               attempt=$((attempt+1))
               echo "Attempt $attempt of $attempts_per_repo for $R" | tee -a "$OUT"
-              STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
-                -H "Authorization: Bearer $TOKEN" \
-                -H "Accept: application/vnd.github+json" \
-                "https://api.github.com/user/starred/$R" || echo "000")
+              STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X PUT -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/user/starred/$R" || echo "000")
 
               echo "HTTP status: $STATUS" | tee -a "$OUT"
 
@@ -215,7 +200,6 @@ jobs:
                 break
               elif [ "$STATUS" = "401" ] || [ "$STATUS" = "403" ]; then
                 echo "::error::Authentication/permission error starring $R (HTTP $STATUS)" | tee -a "$OUT"
-                # No point retrying on auth failure
                 break
               else
                 echo "Non-success, will retry if attempts remain" | tee -a "$OUT"
@@ -223,25 +207,24 @@ jobs:
                 echo "Sleeping $sleep_seconds seconds before retry" | tee -a "$OUT"
                 sleep $sleep_seconds
               fi
-              done
+            done
 
-              if [ $success -ne 1 ]; then
+            if [ $success -ne 1 ]; then
               echo "FAILED: $R after $attempts_per_repo attempts" | tee -a "$OUT"
-              fi
+            fi
 
-              # small pause to avoid throttling
-              sleep 1
-              done < repos_to_star.txt
+            sleep 1
+          done < repos_to_star.txt
 
-              echo "Finished: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" | tee -a "$OUT"
+          echo "Finished: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" | tee -a "$OUT"
 
       - name: Upload run logs
         uses: actions/upload-artifact@v4
         with:
-        name: star-run-logs
-        path: logs
+          name: star-run-logs
+          path: logs
 
       - name: Summary
         if: always()
         run: |
-         echo "Done. repos_to_star.txt and logs uploaded as artifacts."
+          echo "Done. repos_to_star.txt and logs uploaded as artifacts."
