@@ -97,6 +97,9 @@ jobs:
           MAX: ${{ inputs.max_repos }}
         run: |
           set -euo pipefail
+          # Ensure MAX has a sensible default if the input is empty
+          MAX="${MAX:-10}"
+
           CSV=$(find artifact -type f -name 'project-report.csv' | head -n 1 || true)
           if [ -z "$CSV" ]; then
             echo "::error::project-report.csv not found in the artifact"
@@ -111,41 +114,44 @@ jobs:
           import re
 
           csvfile = sys.argv[1]
-          max_repos = int(sys.argv[2])
+          max_repos = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2] else 10
 
           repos = []
           with open(csvfile, newline="", encoding="utf-8") as f:
-          reader = csv.DictReader(f)
-          if not reader.fieldnames or "repository" not in reader.fieldnames:
-          raise SystemExit("CSV missing 'repository' column")
+              reader = csv.DictReader(f)
+              if not reader.fieldnames or "repository" not in reader.fieldnames:
+                  raise SystemExit("CSV missing 'repository' column")
 
-          for row in reader:
-          repo = (row.get("repository") or "").strip()
-          if not repo:
-          continue
-          # normalize: allow full URL or owner/repo
-          if repo.startswith("http://") or repo.startswith("https://"):
-          m = re.match(r'https?://github\.com/([^/]+/[^/]+)', repo)
-          if m:
-          repo = m.group(1)
-          else:
-          continue
-          if '/' not in repo:
-          # not in owner/repo form; skip
-          continue
-          repos.append(repo)
+              for row in reader:
+                  repo = (row.get("repository") or "").strip()
+                  if not repo:
+                      continue
+
+                  # normalize: allow full URL or owner/repo
+                  if repo.startswith(("http://", "https://")):
+                      m = re.match(r'https?://github\.com/([^/]+/[^/]+)', repo)
+                      if m:
+                          repo = m.group(1)
+                      else:
+                          continue
+
+                  if '/' not in repo:
+                      # not in owner/repo form; skip
+                      continue
+
+                  repos.append(repo)
 
           # dedupe while preserving order
           seen = set()
           unique = []
           for r in repos:
-          if r not in seen:
-          seen.add(r)
-          unique.append(r)
+              if r not in seen:
+                  seen.add(r)
+                  unique.append(r)
 
           final = unique[:max_repos]
           if not final:
-          raise SystemExit("No repositories found in CSV after normalization/dedup")
+              raise SystemExit("No repositories found in CSV after normalization/dedup")
 
           print("\n".join(final))
           PY
