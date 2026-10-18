@@ -1,0 +1,109 @@
+name: Star improved-spork reported repos
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_owner:
+        description: 'Source owner (owner of improved-spork)'
+        required: true
+        default: 'Dippp10-ally'
+      source_repo:
+        description: 'Source repo that uploads the artifact'
+        required: true
+        default: 'improved-spork'
+      artifact_prefix:
+        description: 'Artifact name prefix (default: python-project-report)'
+        required: true
+        default: 'python-project-report'
+      max_repos:
+        description: 'Maximum repos to star this run (safety limit)'
+        required: true
+        default: '10'
+
+jobs:
+  star:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y jq unzip
+
+      - name: List and download latest artifact zip
+        env:
+          TOKEN: ${{ secrets.STAR_TOKEN }}
+          SOURCE_OWNER: ${{ inputs.source_owner }}
+          SOURCE_REPO: ${{ inputs.source_repo }}
+          PREFIX: ${{ inputs.artifact_prefix }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::Please create a PAT and set it as the STAR_TOKEN repository secret."
+            exit 1
+          fi
+          ART_JSON=$(curl -s -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$SOURCE_OWNER/$SOURCE_REPO/actions/artifacts")
+          ART_ID=$(echo "$ART_JSON" | jq -r --arg prefix "$PREFIX" '.artifacts[] | select(.name|startswith($prefix)) | .id' | head -n1)
+          if [ -z "$ART_ID" ] || [ "$ART_ID" = "null" ]; then
+            echo "::error::No artifact found with prefix $PREFIX in $SOURCE_OWNER/$SOURCE_REPO"
+            echo "$ART_JSON" | jq -c '.artifacts' || true
+            exit 1
+          fi
+          echo "Found artifact id: $ART_ID"
+          DOWNLOAD_URL="https://api.github.com/repos/$SOURCE_OWNER/$SOURCE_REPO/actions/artifacts/$ART_ID/zip"
+          curl -L -H "Authorization: Bearer $TOKEN" -o artifact.zip "$DOWNLOAD_URL"
+          unzip -q artifact.zip -d artifact
+
+      - name: Extract owner/repo list from project-report.csv
+        env:
+          MAX: ${{ inputs.max_repos }}
+        run: |
+          CSV=$(find artifact -type f -name 'project-report.csv' | head -n1)
+          if [ -z "$CSV" ]; then
+            echo "::error::project-report.csv not found in artifact contents"
+            find artifact -maxdepth 2 -type f -print
+            exit 1
+          fi
+          echo "Using CSV: $CSV"
+          # Use Python to reliably parse the CSV and extract the 'repository' column
+          python - <<'PY'
+import csv,sys
+csvfile = sys.argv[1]
+maxn = int(sys.argv[2])
+repos = []
+with open(csvfile, newline='', encoding='utf-8') as f:
+    reader = csv.DictReader(f)
+    if 'repository' not in reader.fieldnames:
+        sys.exit("CSV missing 'repository' column")
+    for row in reader:
+        r = (row.get('repository') or '').strip()
+        if r:
+            repos.append(r)
+repos = list(dict.fromkeys(repos))[:maxn]
+if not repos:
+    sys.exit("No repositories found in CSV")
+print("\n".join(repos))
+PY
+"$CSV" "$MAX" > repos_to_star.txt
+
+      - name: Star repositories
+        env:
+          TOKEN: ${{ secrets.STAR_TOKEN }}
+        run: |
+          if [ ! -f repos_to_star.txt ]; then
+            echo "::error::repos_to_star.txt missing"
+            exit 1
+          fi
+          while IFS= read -r R; do
+            [ -z "$R" ] && continue
+            echo "Starring $R ..."
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
+              -H "Authorization: Bearer $TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/user/starred/$R")
+            if [ "$STATUS" = "204" ] || [ "$STATUS" = "304" ]; then
+              echo "OK: $R (HTTP $STATUS)"
+            else
+              echo "FAILED: $R (HTTP $STATUS)"
+            fi
+            sleep 1
+          done < repos_to_star.txt
