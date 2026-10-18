@@ -32,6 +32,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   star:
@@ -105,7 +106,9 @@ jobs:
 
           echo "Using CSV: $CSV"
           python3 - "$CSV" "$MAX" <<'PY' > repos_to_star.txt
-          import csv, sys, re
+          import csv
+          import sys
+          import re
 
           csvfile = sys.argv[1]
           max_repos = int(sys.argv[2])
@@ -120,6 +123,7 @@ jobs:
           repo = (row.get("repository") or "").strip()
           if not repo:
           continue
+          # normalize: allow full URL or owner/repo
           if repo.startswith("http://") or repo.startswith("https://"):
           m = re.match(r'https?://github\.com/([^/]+/[^/]+)', repo)
           if m:
@@ -127,24 +131,26 @@ jobs:
           else:
           continue
           if '/' not in repo:
+          # not in owner/repo form; skip
           continue
           repos.append(repo)
 
-            seen = set()
-            unique = []
-            for r in repos:
-            if r not in seen:
-            seen.add(r)
-            unique.append(r)
+          # dedupe while preserving order
+          seen = set()
+          unique = []
+          for r in repos:
+          if r not in seen:
+          seen.add(r)
+          unique.append(r)
 
-            final = unique[:max_repos]
-            if not final:
-            raise SystemExit("No repositories found in CSV after normalization/dedup")
+          final = unique[:max_repos]
+          if not final:
+          raise SystemExit("No repositories found in CSV after normalization/dedup")
 
-            print("\n".join(final))
-            PY
-            echo "Wrote repos_to_star.txt:"
-            cat repos_to_star.txt
+          print("\n".join(final))
+          PY
+          echo "Wrote repos_to_star.txt:"
+          cat repos_to_star.txt
 
       - name: Upload repos list artifact (repos_to_star.txt)
         uses: actions/upload-artifact@v4
