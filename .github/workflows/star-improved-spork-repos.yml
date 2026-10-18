@@ -29,7 +29,7 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y jq unzip
 
-      - name: List and download latest artifact zip
+      - name: Download latest artifact zip from source repo
         env:
           TOKEN: ${{ secrets.STAR_TOKEN }}
           SOURCE_OWNER: ${{ inputs.source_owner }}
@@ -40,50 +40,70 @@ jobs:
             echo "::error::Please create a PAT and set it as the STAR_TOKEN repository secret."
             exit 1
           fi
-          ART_JSON=$(curl -s -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+
+          ART_JSON=$(curl -s -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/$SOURCE_OWNER/$SOURCE_REPO/actions/artifacts")
-          ART_ID=$(echo "$ART_JSON" | jq -r --arg prefix "$PREFIX" '.artifacts[] | select(.name|startswith($prefix)) | .id' | head -n1)
+
+          ART_ID=$(echo "$ART_JSON" | jq -r --arg prefix "$PREFIX" '.artifacts[] | select(.name|startswith($prefix)) | .id' | head -n 1)
+
           if [ -z "$ART_ID" ] || [ "$ART_ID" = "null" ]; then
             echo "::error::No artifact found with prefix $PREFIX in $SOURCE_OWNER/$SOURCE_REPO"
             echo "$ART_JSON" | jq -c '.artifacts' || true
             exit 1
           fi
+
           echo "Found artifact id: $ART_ID"
-          DOWNLOAD_URL="https://api.github.com/repos/$SOURCE_OWNER/$SOURCE_REPO/actions/artifacts/$ART_ID/zip"
-          curl -L -H "Authorization: Bearer $TOKEN" -o artifact.zip "$DOWNLOAD_URL"
+          curl -L -H "Authorization: Bearer $TOKEN" \
+            -o artifact.zip \
+            "https://api.github.com/repos/$SOURCE_OWNER/$SOURCE_REPO/actions/artifacts/$ART_ID/zip"
+
           unzip -q artifact.zip -d artifact
 
       - name: Extract owner/repo list from project-report.csv
         env:
           MAX: ${{ inputs.max_repos }}
         run: |
-          CSV=$(find artifact -type f -name 'project-report.csv' | head -n1)
+          CSV=$(find artifact -type f -name 'project-report.csv' | head -n 1)
           if [ -z "$CSV" ]; then
-            echo "::error::project-report.csv not found in artifact contents"
+            echo "::error::project-report.csv not found in the artifact"
             find artifact -maxdepth 2 -type f -print
             exit 1
           fi
+
           echo "Using CSV: $CSV"
-          # Use Python to reliably parse the CSV and extract the 'repository' column
-          python - <<'PY'
-import csv,sys
-csvfile = sys.argv[1]
-maxn = int(sys.argv[2])
-repos = []
-with open(csvfile, newline='', encoding='utf-8') as f:
-    reader = csv.DictReader(f)
-    if 'repository' not in reader.fieldnames:
-        sys.exit("CSV missing 'repository' column")
-    for row in reader:
-        r = (row.get('repository') or '').strip()
-        if r:
-            repos.append(r)
-repos = list(dict.fromkeys(repos))[:maxn]
-if not repos:
-    sys.exit("No repositories found in CSV")
-print("\n".join(repos))
-PY
-"$CSV" "$MAX" > repos_to_star.txt
+
+          python - "$CSV" "$MAX" <<'PY' > repos_to_star.txt
+          import csv
+          import sys
+
+          csvfile = sys.argv[1]
+          max_repos = int(sys.argv[2])
+
+          repos = []
+          with open(csvfile, newline="", encoding="utf-8") as f:
+              reader = csv.DictReader(f)
+              if not reader.fieldnames or "repository" not in reader.fieldnames:
+                  raise SystemExit("CSV missing 'repository' column")
+
+              for row in reader:
+                  repo = (row.get("repository") or "").strip()
+                  if repo:
+                      repos.append(repo)
+
+          seen = set()
+          unique_repos = []
+          for repo in repos:
+              if repo not in seen:
+                  seen.add(repo)
+                  unique_repos.append(repo)
+
+          final = unique_repos[:max_repos]
+          if not final:
+              raise SystemExit("No repositories found in CSV")
+
+          print("\n".join(final))
+          PY
 
       - name: Star repositories
         env:
@@ -93,6 +113,7 @@ PY
             echo "::error::repos_to_star.txt missing"
             exit 1
           fi
+
           while IFS= read -r R; do
             [ -z "$R" ] && continue
             echo "Starring $R ..."
@@ -100,10 +121,12 @@ PY
               -H "Authorization: Bearer $TOKEN" \
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/user/starred/$R")
+
             if [ "$STATUS" = "204" ] || [ "$STATUS" = "304" ]; then
               echo "OK: $R (HTTP $STATUS)"
             else
               echo "FAILED: $R (HTTP $STATUS)"
             fi
+
             sleep 1
           done < repos_to_star.txt
