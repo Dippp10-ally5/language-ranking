@@ -38,7 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      LOG_DIR: logs
+    LOG_DIR: logs
     steps:
       - name: Checkout (not strictly required, but useful)
         uses: actions/checkout@v4
