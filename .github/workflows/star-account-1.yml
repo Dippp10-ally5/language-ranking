@@ -55,13 +55,11 @@ jobs:
 
           USER_JSON=$(curl -sS -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/user")
           login=$(echo "$USER_JSON" | jq -r '.login // empty')
-
           if [ -z "$login" ]; then
             echo "::error::STAR_TOKEN_1 authentication failed."
             echo "$USER_JSON"
             exit 1
           fi
-
           echo "Artifact account: $login"
 
       - name: Download latest matching artifact zip from source repo
@@ -74,7 +72,7 @@ jobs:
           set -euo pipefail
           mkdir -p artifact
 
-          python3 - "$TOKEN" "$SOURCE_OWNER" "$SOURCE_REPO" "$PREFIX" <<'PY'
+          python3 - "$TOKEN" "$SOURCE_OWNER" "$SOURCE_REPO" "$PREFIX" > artifact_id.txt <<'PY'
           import json
           import sys
           import urllib.request
@@ -94,6 +92,7 @@ jobs:
               )
               with urllib.request.urlopen(req, timeout=30) as resp:
                   payload = json.load(resp)
+
               items = payload.get("artifacts", [])
               if not items:
                   break
@@ -108,10 +107,9 @@ jobs:
 
           best = max(matches, key=lambda a: (a.get("updated_at") or ""))
           print(best["id"])
-          PY > artifact_id.txt
+          PY
 
           ART_ID=$(tr -d '\r\n' < artifact_id.txt)
-
           if [ -z "$ART_ID" ] || [ "$ART_ID" = "null" ]; then
             echo "::error::No artifact found with prefix $PREFIX in $SOURCE_OWNER/$SOURCE_REPO"
             exit 1
@@ -125,7 +123,7 @@ jobs:
 
           unzip -q artifact.zip -d artifact
 
-      - name: Extract repo list from project-report.csv
+      - name: Extract repos list from project-report.csv
         env:
           MAX: ${{ inputs.max_repos }}
         run: |
