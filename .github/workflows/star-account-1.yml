@@ -2,7 +2,7 @@ name: Star improved-spork reported repos - Account 1
 
 on:
   schedule:
-    - cron: '55 15 * * *'
+    - cron: '15 16 * * *'   # 8:15 PM Oman = 16:15 UTC
   workflow_dispatch:
     inputs:
       source_owner:
@@ -148,7 +148,78 @@ jobs:
           fi
 
           python3 - "$CSV" "$MAX" <<'PY' > repos_to_star.txt
-          import csv, re, sys
+          import csv
+          import sys
 
           csvfile = sys.argv[1]
-          max_repos = int(sys.argv[2]) if len(sys.argv)
+          max_repos = int(sys.argv[2]) if len(sys.argv) > 2 else 10
+
+          repos = []
+          with open(csvfile, newline="", encoding="utf-8") as f:
+              reader = csv.DictReader(f)
+              for row in reader:
+                  repo = (
+                      row.get("full_name")
+                      or row.get("repo")
+                      or row.get("repository")
+                      or row.get("name")
+                  )
+                  if not repo:
+                      continue
+                  repo = str(repo).strip()
+                  if not repo:
+                      continue
+                  if repo.startswith("http://") or repo.startswith("https://"):
+                      continue
+                  repos.append(repo)
+
+          seen = set()
+          out = []
+          for repo in repos:
+              if repo in seen:
+                  continue
+              seen.add(repo)
+              out.append(repo)
+              if len(out) >= max_repos:
+                  break
+
+          for repo in out:
+              print(repo)
+          PY
+
+          if [ ! -s repos_to_star.txt ]; then
+            echo "::warning::No repos found for account 1"
+            exit 0
+          fi
+
+          echo "Repos to star:"
+          cat repos_to_star.txt
+
+      - name: Star repositories
+        env:
+          TOKEN: ${{ secrets.STAR_TOKEN_1 }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+
+          if [ ! -f repos_to_star.txt ]; then
+            echo "::warning::repos_to_star.txt not found"
+            exit 0
+          fi
+
+          while IFS= read -r repo; do
+            [ -z "$repo" ] && continue
+
+            if [ "${DRY_RUN:-false}" = "true" ]; then
+              echo "DRY RUN: would star $repo"
+              continue
+            fi
+
+            echo "Starring $repo"
+            curl -sS \
+              -X PUT \
+              -H "Authorization: Bearer $TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -w "\nHTTP %{http_code}\n" \
+              "https://api.github.com/user/starred/$repo"
+          done < repos_to_star.txt
