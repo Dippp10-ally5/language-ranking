@@ -2,7 +2,7 @@ name: Star improved-spork reported repos - Account 1
 
 on:
   schedule:
-    - cron: '0 2 * * *'
+    - cron: '55 15 * * *'
   workflow_dispatch:
     inputs:
       source_owner:
@@ -53,7 +53,11 @@ jobs:
             exit 1
           fi
 
-          USER_JSON=$(curl -sS -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/user")
+          USER_JSON=$(curl -sS \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/user")
+
           login=$(echo "$USER_JSON" | jq -r '.login // empty')
           if [ -z "$login" ]; then
             echo "::error::STAR_TOKEN_1 authentication failed."
@@ -65,12 +69,19 @@ jobs:
       - name: Download latest matching artifact zip from source repo
         env:
           TOKEN: ${{ secrets.STAR_TOKEN_1 }}
-          SOURCE_OWNER: ${{ inputs.source_owner }}
-          SOURCE_REPO: ${{ inputs.source_repo }}
-          PREFIX: ${{ inputs.artifact_prefix }}
+          SOURCE_OWNER: ${{ inputs.source_owner || 'Dippp10-ally' }}
+          SOURCE_REPO: ${{ inputs.source_repo || 'improved-spork' }}
+          PREFIX: ${{ inputs.artifact_prefix || 'python-project-report' }}
         run: |
           set -euo pipefail
+
+          SOURCE_OWNER="${SOURCE_OWNER:-Dippp10-ally}"
+          SOURCE_REPO="${SOURCE_REPO:-improved-spork}"
+          PREFIX="${PREFIX:-python-project-report}"
+
           mkdir -p artifact
+          echo "Using source repo: ${SOURCE_OWNER}/${SOURCE_REPO}"
+          echo "Using artifact prefix: ${PREFIX}"
 
           python3 - "$TOKEN" "$SOURCE_OWNER" "$SOURCE_REPO" "$PREFIX" > artifact_id.txt <<'PY'
           import json
@@ -125,7 +136,7 @@ jobs:
 
       - name: Extract repos list from project-report.csv
         env:
-          MAX: ${{ inputs.max_repos }}
+          MAX: ${{ inputs.max_repos || '10' }}
         run: |
           set -euo pipefail
           MAX="${MAX:-10}"
@@ -140,124 +151,4 @@ jobs:
           import csv, re, sys
 
           csvfile = sys.argv[1]
-          max_repos = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2] else 10
-
-          repos = []
-          with open(csvfile, newline="", encoding="utf-8") as f:
-              reader = csv.DictReader(f)
-              if not reader.fieldnames or "repository" not in reader.fieldnames:
-                  raise SystemExit("CSV missing 'repository' column")
-
-              for row in reader:
-                  repo = (row.get("repository") or "").strip()
-                  if not repo:
-                      continue
-
-                  if repo.startswith(("http://", "https://")):
-                      m = re.match(r'https?://github\.com/([^/]+/[^/]+)', repo)
-                      if m:
-                          repo = m.group(1)
-                      else:
-                          continue
-
-                  if '/' not in repo:
-                      continue
-
-                  repos.append(repo)
-
-          seen = set()
-          unique = []
-          for r in repos:
-              if r not in seen:
-                  seen.add(r)
-                  unique.append(r)
-
-          final = unique[:max_repos]
-          if not final:
-              raise SystemExit("No repositories found in CSV after normalization/dedup")
-
-          print("\n".join(final))
-          PY
-
-          echo "Repos to star:"
-          cat repos_to_star.txt
-
-      - name: Upload repos list artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: repos-to-star-1
-          path: repos_to_star.txt
-
-  star:
-    needs: prepare
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - name: Download repo list
-        uses: actions/download-artifact@v4
-        with:
-          name: repos-to-star-1
-          path: .
-
-      - name: Star repos using account 1 token
-        env:
-          TOKEN: ${{ secrets.STAR_TOKEN_1 }}
-          DRY: ${{ inputs.dry_run }}
-        run: |
-          set -euo pipefail
-
-          if [ ! -f repos_to_star.txt ]; then
-            echo "::error::repos_to_star.txt missing"
-            exit 1
-          fi
-
-          DRY_LOWER="${DRY,,}"
-
-          while IFS= read -r R; do
-            R=$(echo "$R" | tr -d '\r')
-            [ -z "$R" ] && continue
-
-            if ! echo "$R" | grep -qE '^[^/]+/[^/]+$'; then
-              echo "SKIP: repo not in owner/repo format: $R"
-              continue
-            fi
-
-            if [ "$DRY_LOWER" = "true" ]; then
-              echo "DRY RUN: would star $R"
-              continue
-            fi
-
-            attempt=1
-            while [ "$attempt" -le 3 ]; do
-              STATUS=$(curl -sS -o /tmp/star.out -w "%{http_code}" \
-                -X PUT \
-                -H "Authorization: Bearer $TOKEN" \
-                -H "Accept: application/vnd.github+json" \
-                "https://api.github.com/user/starred/$R" || echo "000")
-
-              if [ "$STATUS" = "204" ] || [ "$STATUS" = "304" ]; then
-                echo "OK: $R"
-                break
-              fi
-
-              if [ "$STATUS" = "401" ] || [ "$STATUS" = "403" ]; then
-                echo "::warning::Permission/auth error for $R (HTTP $STATUS)"
-                cat /tmp/star.out || true
-                break
-              fi
-
-              if [ "$STATUS" = "429" ] || [ "$STATUS" = "500" ] || [ "$STATUS" = "502" ] || [ "$STATUS" = "503" ] || [ "$STATUS" = "504" ]; then
-                echo "::warning::Transient failure for $R (HTTP $STATUS), retry $attempt/3"
-                cat /tmp/star.out || true
-                sleep 5
-                attempt=$((attempt + 1))
-                continue
-              fi
-
-              echo "::warning::HTTP $STATUS for $R"
-              cat /tmp/star.out || true
-              break
-            done
-          done < repos_to_star.txt
-
-          echo "Finished account 1 star run"
+          max_repos = int(sys.argv[2]) if len(sys.argv)
